@@ -2,135 +2,115 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="Pronosticador V4 FUNDAMENTADO", page_icon="🧠", layout="wide")
-st.title("🧠 Pronosticador V4 - Fundamentado con Datos Reales")
+st.set_page_config(page_title="Pronosticador V5 - Inteligente", page_icon="🧠", layout="wide")
+st.title("🧠 Pronosticador V5 - Simple y Fundamentado")
 
-# --- CAJITA DE KEY ---
-st.markdown("### 🔑 API Key (Opcional - Modo PRO)")
-api_key = st.text_input("Pegá tu key de API-Football acá para activar datos reales", type="password", placeholder="Si no tenés, dejalo vacío y funciona igual")
-st.caption("Conseguila gratis en dashboard.api-football.com - Sin key usa datos del día de hoy")
+api_key = st.text_input("🔑 Tu API Key (queda guardada en esta sesión)", type="password", value=st.session_state.get("key",""))
+if api_key: st.session_state["key"] = api_key
 
-def get_team_stats(team_name, headers):
+def get_stats(team_name, headers):
     try:
-        # 1. Buscar ID del equipo
-        search_url = f"https://v3.football.api-sports.io/teams?search={team_name.split()[0]}"
-        r = requests.get(search_url, headers=headers, timeout=8)
-        data = r.json()
-        if not data['response']: return None
-        team_id = data['response'][0]['team']['id']
-
-        # 2. Traer últimos 5 partidos
-        fix_url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
-        r2 = requests.get(fix_url, headers=headers, timeout=8)
+        # Busca ID
+        r = requests.get(f"https://v3.football.api-sports.io/teams?search={team_name.split()[0]}", headers=headers, timeout=8)
+        if not r.json()['response']: return None
+        team_id = r.json()['response'][0]['team']['id']
+        # Ultimos 5
+        r2 = requests.get(f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5", headers=headers, timeout=8)
         fixtures = r2.json()['response']
-
-        wins = 0; goals_for = 0; goals_against = 0
+        wins=0; gf=0; ga=0
         for f in fixtures:
-            if f['teams']['home']['id'] == team_id:
-                gf = f['goals']['home']; ga = f['goals']['away']
-                if f['teams']['home']['winner']: wins+=1
-            else:
-                gf = f['goals']['away']; ga = f['goals']['home']
-                if f['teams']['away']['winner']: wins+=1
-            if gf is not None: goals_for+=gf; goals_against+=ga if ga is not None else 0
-
-        # Boost basado en forma real
-        form_boost = 0.7 + (wins/5)*0.8 # 0.7 a 1.5
-        # Si mete muchos goles, boost extra
-        if goals_for >= 8: form_boost += 0.1
-
-        return {"wins": wins, "gf": goals_for, "ga": goals_against, "boost": round(min(form_boost, 1.6), 2), "fixtures": len(fixtures)}
-    except Exception as e:
-        return None
+            is_home = f['teams']['home']['id']==team_id
+            gfor = f['goals']['home'] if is_home else f['goals']['away']
+            gaga = f['goals']['away'] if is_home else f['goals']['home']
+            if (is_home and f['teams']['home']['winner']) or (not is_home and f['teams']['away']['winner']): wins+=1
+            if gfor: gf+=gfor
+            if gaga: ga+=gaga
+        boost = min(0.7 + (wins/5)*0.8 + (0.1 if gf>=8 else 0), 1.6)
+        stars = "⭐"*wins + "☆"*(5-wins)
+        return {"wins":wins, "gf":gf, "ga":ga, "boost":round(boost,2), "stars":stars, "id":team_id}
+    except: return None
 
 headers = {"x-apisports-key": api_key} if api_key else None
 
-# --- PARTIDOS EDITABLES ---
-st.markdown("---")
-st.subheader("📝 1. Tus 6 partidos (editá lo que quieras)")
-
-partidos_default = [
-    {"nombre": "Frankfurt vs Friburgo", "c1": 2.37, "cx": 3.85, "c2": 2.70},
-    {"nombre": "Roma vs Inter", "c1": 2.62, "cx": 3.50, "c2": 2.60},
-    {"nombre": "Union vs Independiente", "c1": 2.47, "cx": 3.05, "c2": 3.15},
-    {"nombre": "Instituto vs Talleres", "c1": 2.00, "cx": 3.30, "c2": 4.60},
-    {"nombre": "Gimnasia Mza vs Riestra", "c1": 2.20, "cx": 2.92, "c2": 3.95},
-    {"nombre": "Stuttgart vs Dortmund", "c1": 2.40, "cx": 3.75, "c2": 2.72},
+st.subheader("📝 Tus 6 partidos")
+defaults = [
+    "Frankfurt vs Friburgo","Roma vs Inter","Union vs Independiente",
+    "Instituto vs Talleres","Gimnasia Mza vs Riestra","Stuttgart vs Dortmund"
 ]
+partidos_data = []
+for i, def_name in enumerate(defaults):
+    c1, c2, c3, c4 = st.columns([3,1,1,1])
+    with c1: nombre = st.text_input(f"Partido {i+1}", value=def_name, key=f"v5_nom_{i}", label_visibility="collapsed")
+    with c2: q1 = st.number_input("1", value=2.50, key=f"v5_q1_{i}", step=0.05)
+    with c3: qx = st.number_input("X", value=3.30, key=f"v5_qx_{i}", step=0.05)
+    with c4: q2 = st.number_input("2", value=2.80, key=f"v5_q2_{i}", step=0.05)
 
-partidos = []
-for i, p in enumerate(partidos_default):
-    st.markdown(f"**PARTIDO {i+1}**")
-    c_nom, c1, cx, c2 = st.columns([3,1,1,1])
-    with c_nom:
-        nom = st.text_input(f"Nombre", value=p['nombre'], key=f"nom_v4_{i}", label_visibility="collapsed", placeholder="Ej: Boca vs River")
-    with c1: cuota1 = st.number_input("1", value=p['c1'], key=f"c1_v4_{i}", step=0.05)
-    with cx: cuotax = st.number_input("X", value=p['cx'], key=f"cx_v4_{i}", step=0.05)
-    with c2: cuota2 = st.number_input("2", value=p['c2'], key=f"c2_v4_{i}", step=0.05)
+    s1 = s2 = None
+    if headers and "vs" in nombre:
+        t1, t2 = [x.strip() for x in nombre.split("vs")][:2]
+        col_a, col_b = st.columns(2)
+        with col_a:
+            with st.spinner(f"Analizando {t1}..."): s1 = get_stats(t1, headers)
+            if s1: st.caption(f"{t1} {s1['stars']} {s1['wins']}V GF:{s1['gf']} - Boost {s1['boost']}")
+            else: st.caption(f"{t1} - sin datos")
+        with col_b:
+            with st.spinner(f"Analizando {t2}..."): s2 = get_stats(t2, headers)
+            if s2: st.caption(f"{t2} {s2['stars']} {s2['wins']}V GF:{s2['gf']} - Boost {s2['boost']}")
+            else: st.caption(f"{t2} - sin datos")
 
-    # Si hay key, buscar stats reales
-    boost_info = "[1.0, 1.0, 1.0]"
-    stats_text = "Usando boost base (sin key)"
-    if api_key and "vs" in nom:
-        team1 = nom.split("vs")[0].strip()
-        team2 = nom.split("vs")[1].strip()
-        with st.spinner(f"Buscando forma real de {team1} y {team2}..."):
-            s1 = get_team_stats(team1, headers)
-            s2 = get_team_stats(team2, headers)
-            if s1 and s2:
-                # Boost: local, empate, visita basado en forma
-                b1 = s1['boost']; b2 = s2['boost']
-                stats_text = f"✅ REAL: {team1} {s1['wins']}V- GF:{s1['gf']} ({b1}) | {team2} {s2['wins']}V- GF:{s2['gf']} ({b2})"
-                boost_info = f"[{b1}, 0.9, {b2}]"
-                # Guardamos boosts
-                partidos.append((nom, [cuota1, cuotax, cuota2], [b1, 0.9, b2], stats_text))
-            else:
-                partidos.append((nom, [cuota1, cuotax, cuota2], [1.1, 0.9, 1.1], "⚠️ No se encontró, usando boost neutro"))
-        st.caption(stats_text)
-    else:
-        partidos.append((nom, [cuota1, cuotax, cuota2], [1.1, 0.9, 1.1], stats_text))
-        st.caption(stats_text)
+    # Boosts por defecto si no hay API
+    b1 = s1['boost'] if s1 else 1.1
+    b2 = s2['boost'] if s2 else 1.1
+    if s1 and s1['wins']<=1: st.warning(f"⚠️ OJO: {nombre.split('vs')[0]} viene MAL ({s1['wins']}V)")
+    if s2 and s2['wins']<=1: st.warning(f"⚠️ OJO: {nombre.split('vs')[1]} viene MAL ({s2['wins']}V)")
 
-st.markdown("---")
-cantidad = st.slider("Top combinaciones a ver", 10, 100, 36)
+    partidos_data.append((nombre, [q1,qx,q2], [b1, 0.9, b2], s1, s2))
 
-if st.button(f"🚀 CALCULAR CON FUNDAMENTOS", type="primary", use_container_width=True):
-    probs = []
-    for (nom, odds, boost, info) in partidos:
-        inv = [1/odds[0], 1/odds[1], 1/odds[2]]
-        s = sum(inv)
-        real = [inv[0]/s*boost[0], inv[1]/s*boost[1], inv[2]/s*boost[2]]
-        total = sum(real)
-        real = [r/total for r in real]
-        probs.append(real)
+cantidad = st.slider("¿Cuántas jugadas ver?", 10, 100, 36)
 
-    labels = ["1","X","2"]
-    combos = []
+if st.button("🚀 CALCULAR V5 FUNDAMENTADA", type="primary", use_container_width=True):
+    probs=[]
+    for nom, odds, boost, _, _ in partidos_data:
+        inv=[1/o for o in odds]; s=sum(inv)
+        real=[inv[0]/s*boost[0], inv[1]/s*boost[1], inv[2]/s*boost[2]]
+        tot=sum(real); real=[r/tot for r in real]; probs.append(real)
+
+    labels=["1","X","2"]
+    combos=[]
     for a in range(3):
      for b in range(3):
       for c in range(3):
        for d in range(3):
         for e in range(3):
          for f in range(3):
-            combo = (a,b,c,d,e,f)
-            if sum(x==1 for x in combo) > 1: continue
-            prob = probs[0][a]*probs[1][b]*probs[2][c]*probs[3][d]*probs[4][e]*probs[5][f]
-            combos.append((combo, prob))
+            co=(a,b,c,d,e,f)
+            if sum(x==1 for x in co)>1: continue
+            p=probs[0][a]*probs[1][b]*probs[2][c]*probs[3][d]*probs[4][e]*probs[5][f]
+            combos.append((co,p))
+    combos=sorted(combos, key=lambda x: x[1], reverse=True)[:cantidad]
 
-    combos = sorted(combos, key=lambda x: x[1], reverse=True)[:cantidad]
     rows=[]
-    for idx, (combo, p) in enumerate(combos):
-        txt = "-".join([labels[v] for v in combo])
-        rows.append({"#": idx+1, "COMBINACION": txt, "Prob %": round(p*100, 4), "Cant X": sum(x==1 for x in combo)})
+    for idx,(co,p) in enumerate(combos):
+        txt="-".join([labels[v] for v in co])
+        detalle=[]
+        for j,v in enumerate(co):
+            tname=partidos_data[j][0]
+            if v==0: detalle.append(tname.split("vs")[0].strip())
+            elif v==2: detalle.append(tname.split("vs")[1].strip() if "vs" in tname else tname)
+            else: detalle.append("EMPATE")
+        rows.append({"#":idx+1,"COMBINACION":txt,"QUIEN GANA":" / ".join(detalle),"Prob %":round(p*100,4)})
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, height=600)
-    st.success(f"🏆 MEJOR JUGADA FUNDAMENTADA: {rows[0]['COMBINACION']} con {rows[0]['Prob %']}%")
+    df=pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True, height=500)
+    st.success(f"🏆 MEJOR: {rows[0]['COMBINACION']} -> {rows[0]['QUIEN GANA']}")
 
-    if api_key:
-        st.balloons()
-        st.info("🧠 Este resultado está fundamentado con los últimos 5 partidos reales de cada equipo via API")
-    else:
-        st.warning("💡 Pegá la key arriba para activar el modo 100% fundamentado con datos en vivo")
+    # Texto para WhatsApp con justificación real
+    justif = f"🧠 *Pronóstico Fundamentado V5* - Top {rows[0]['COMBINACION']} ({rows[0]['Prob %']}%)\n\n"
+    for j,v in enumerate(combos[0][0]):
+        nom,_,_,s1,s2 = partidos_data[j]
+        if labels[v]=="1" and s1: justif+=f"✅ {nom.split('vs')[0]} {s1['stars']} viene con {s1['wins']}V en 5, GF {s1['gf']}\n"
+        elif labels[v]=="2" and s2: justif+=f"✅ {nom.split('vs')[1]} {s2['stars']} viene con {s2['wins']}V en 5, GF {s2['gf']}\n"
+    justif+="\n_Fundamentado con últimos 5 partidos reales vía API_"
 
-    st.download_button("📥 Descargar CSV", df.to_csv(index=False).encode('utf-8'), "v4_fundamentado.csv", "text/csv")
+    st.text_area("📲 Copiá para WhatsApp:", value=justif, height=200)
+    st.download_button("📥 Descargar CSV", df.to_csv(index=False).encode('utf-8'), "v5_fundamentado.csv", "text/csv")
